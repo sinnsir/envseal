@@ -1,17 +1,17 @@
 package cmd
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/yourorg/envseal/internal/keystore"
+	"github.com/yourorg/envseal/internal/store"
 )
 
-const defaultKeystoreDir = ".envseal/keys"
-
-var rootKeystoreDir string
-
-// Execute builds and runs the root command.
+// Execute runs the root command.
 func Execute() error {
 	return newRootCmd().Execute()
 }
@@ -20,56 +20,60 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:   "envseal",
 		Short: "Encrypt and version .env files using age encryption",
-		Long: `envseal encrypts .env files per environment using age encryption.
-
-Keys are stored locally in .envseal/keys and never committed to git.
-Sealed files live in .envseal/ and are safe to commit.`,
-		SilenceUsage: true,
 	}
-
-	root.PersistentFlags().StringVar(
-		&rootKeystoreDir,
-		"keystore",
-		"",
-		"Path to keystore directory (default: .envseal/keys)",
-	)
-
 	root.AddCommand(
+		newInitCmd(),
 		newSealCmd(),
 		newOpenCmd(),
-		newInitCmd(),
+		newDiffCmd(),
 	)
-
 	return root
 }
 
 func newInitCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "init [env]",
-		Short: "Generate a new age key pair for an environment",
+		Use:   "init <env>",
+		Short: "Generate a new age key for an environment",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			env := args[0]
-			ks, err := keystore.New(keystoreDir())
+			ksDir := keystoreDir()
+			ks, err := keystore.New(ksDir)
 			if err != nil {
-				return err
+				return fmt.Errorf("keystore: %w", err)
 			}
-			pub, err := ks.Generate(env)
+			recipient, err := ks.Generate(env)
 			if err != nil {
-				return err
+				return fmt.Errorf("generate key: %w", err)
 			}
-			cmd.Printf("generated key for %q\npublic key: %s\n", env, pub)
+			fmt.Printf("Generated key for %q\nPublic key: %s\n", env, recipient)
 			return nil
 		},
 	}
 }
 
+// keystoreDir returns the directory used for key storage,
+// preferring the ENVSEAL_KEYSTORE env var, then ~/.config/envseal/keys.
 func keystoreDir() string {
-	if rootKeystoreDir != "" {
-		return rootKeystoreDir
+	if d := os.Getenv("ENVSEAL_KEYSTORE"); d != "" {
+		return d
 	}
-	if dir, err := os.Getwd(); err == nil {
-		return filepath.Join(dir, defaultKeystoreDir)
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ".envseal/keys"
 	}
-	return defaultKeystoreDir
+	return filepath.Join(home, ".config", "envseal", "keys")
+}
+
+// storeDir returns the store directory, preferring ENVSEAL_STORE env var.
+func storeDir() (string, error) {
+	if d := os.Getenv("ENVSEAL_STORE"); d != "" {
+		st, err := store.New(d)
+		if err != nil {
+			return "", err
+		}
+		_ = st
+		return d, nil
+	}
+	return "", nil
 }
