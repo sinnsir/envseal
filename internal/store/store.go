@@ -1,3 +1,4 @@
+// Package store manages sealed envelope files on disk.
 package store
 
 import (
@@ -5,91 +6,84 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-const (
-	DefaultDir      = ".envseal"
-	SealedExtension = ".sealed"
-)
+const sealedExt = ".sealed"
 
-// ErrNotFound is returned when a sealed file does not exist for the given environment.
-var ErrNotFound = errors.New("sealed env file not found")
-
-// Store manages sealed .env files on disk.
+// Store manages sealed .env files in a directory.
 type Store struct {
-	baseDir string
+	dir string
 }
 
-// New creates a Store rooted at baseDir.
-func New(baseDir string) *Store {
-	return &Store{baseDir: baseDir}
-}
-
-// Default returns a Store using the default directory relative to dir.
-func Default(dir string) *Store {
-	return New(filepath.Join(dir, DefaultDir))
-}
-
-// Path returns the file path for the given environment's sealed file.
-func (s *Store) Path(env string) string {
-	return filepath.Join(s.baseDir, env+SealedExtension)
-}
-
-// Write persists data as the sealed file for env, creating directories as needed.
-func (s *Store) Write(env string, data []byte) error {
-	if err := os.MkdirAll(s.baseDir, 0o700); err != nil {
-		return fmt.Errorf("store: create dir: %w", err)
+// New returns a Store rooted at dir, creating it if necessary.
+func New(dir string) (*Store, error) {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("create store dir: %w", err)
 	}
-	path := s.Path(env)
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return fmt.Errorf("store: write %s: %w", path, err)
+	return &Store{dir: dir}, nil
+}
+
+// Default returns the default store path relative to dir.
+func Default(base string) string {
+	return filepath.Join(base, ".envseal")
+}
+
+func (s *Store) path(env string) string {
+	return filepath.Join(s.dir, env+sealedExt)
+}
+
+// Write persists the sealed data for env.
+func (s *Store) Write(env string, data []byte) error {
+	if err := os.WriteFile(s.path(env), data, 0o600); err != nil {
+		return fmt.Errorf("write sealed env: %w", err)
 	}
 	return nil
 }
 
-// Read returns the sealed bytes for env.
+// Read loads the sealed data for env.
 func (s *Store) Read(env string) ([]byte, error) {
-	path := s.Path(env)
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("store: %w for environment %q", ErrNotFound, env)
-	}
+	data, err := os.ReadFile(s.path(env))
 	if err != nil {
-		return fmt.Errorf("store: read %s: %w", path, err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("sealed env %q not found", env)
+		}
+		return nil, fmt.Errorf("read sealed env: %w", err)
 	}
 	return data, nil
 }
 
+// Delete removes the sealed file for env.
+func (s *Store) Delete(env string) error {
+	if err := os.Remove(s.path(env)); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("sealed env %q not found", env)
+		}
+		return fmt.Errorf("delete sealed env: %w", err)
+	}
+	return nil
+}
+
+// Exists reports whether a sealed file for env exists.
+func (s *Store) Exists(env string) bool {
+	_, err := os.Stat(s.path(env))
+	return err == nil
+}
+
 // List returns all environment names that have sealed files.
 func (s *Store) List() ([]string, error) {
-	entries, err := os.ReadDir(s.baseDir)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
+	entries, err := os.ReadDir(s.dir)
 	if err != nil {
-		return nil, fmt.Errorf("store: list: %w", err)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("list store: %w", err)
 	}
 	var envs []string
 	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if filepath.Ext(name) == SealedExtension {
-			envs = append(envs, name[:len(name)-len(SealedExtension)])
+		if !e.IsDir() && strings.HasSuffix(e.Name(), sealedExt) {
+			envs = append(envs, strings.TrimSuffix(e.Name(), sealedExt))
 		}
 	}
 	return envs, nil
-}
-
-// Remove deletes the sealed file for env.
-func (s *Store) Remove(env string) error {
-	path := s.Path(env)
-	if err := os.Remove(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("store: %w for environment %q", ErrNotFound, env)
-		}
-		return fmt.Errorf("store: remove %s: %w", path, err)
-	}
-	return nil
 }
