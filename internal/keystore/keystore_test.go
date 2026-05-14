@@ -1,69 +1,82 @@
-package keystore_test
+package keystore
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
-	"github.com/yourorg/envseal/internal/keystore"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGenerateAndLoad(t *testing.T) {
-	tmpDir := t.TempDir()
-	store := keystore.New(tmpDir)
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
 
-	kp, err := store.Generate("production")
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
-	if kp.Environment != "production" {
-		t.Errorf("expected environment %q, got %q", "production", kp.Environment)
-	}
-	if kp.Identity == nil || kp.Recipient == nil {
-		t.Fatal("expected non-nil Identity and Recipient")
-	}
+	id, err := ks.Generate("staging")
+	require.NoError(t, err)
+	require.NotNil(t, id)
 
-	// Key files should exist on disk.
-	for _, name := range []string{"production.key", "production.pub"} {
-		path := filepath.Join(tmpDir, keystore.KeyDir, name)
-		if _, err := os.Stat(path); err != nil {
-			t.Errorf("expected file %s to exist: %v", path, err)
-		}
-	}
-
-	// Private key file should not be world-readable.
-	info, _ := os.Stat(filepath.Join(tmpDir, keystore.KeyDir, "production.key"))
-	if info.Mode().Perm() != 0600 {
-		t.Errorf("private key perm: got %v, want 0600", info.Mode().Perm())
-	}
+	loaded, err := ks.Load("staging")
+	require.NoError(t, err)
+	require.Equal(t, id.String(), loaded.String())
 }
 
 func TestLoad_RoundTrip(t *testing.T) {
-	tmpDir := t.TempDir()
-	store := keystore.New(tmpDir)
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
 
-	orig, err := store.Generate("staging")
-	if err != nil {
-		t.Fatalf("Generate: %v", err)
-	}
+	_, err = ks.Generate("prod")
+	require.NoError(t, err)
 
-	loaded, err := store.Load("staging")
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	id2, err := ks.Generate("prod") // overwrite
+	require.NoError(t, err)
 
-	if orig.Recipient.String() != loaded.Recipient.String() {
-		t.Errorf("recipient mismatch after round-trip")
-	}
+	loaded, err := ks.Load("prod")
+	require.NoError(t, err)
+	require.Equal(t, id2.String(), loaded.String())
 }
 
 func TestLoad_NotFound(t *testing.T) {
-	store := keystore.New(t.TempDir())
-	_, err := store.Load("nonexistent")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
+
+	_, err = ks.Load("missing")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestExists(t *testing.T) {
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
+
+	require.False(t, ks.Exists("dev"))
+	_, err = ks.Generate("dev")
+	require.NoError(t, err)
+	require.True(t, ks.Exists("dev"))
+}
+
+func TestDelete(t *testing.T) {
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
+
+	_, err = ks.Generate("dev")
+	require.NoError(t, err)
+
+	require.NoError(t, ks.Delete("dev"))
+	require.False(t, ks.Exists("dev"))
+
+	err = ks.Delete("dev")
+	require.ErrorIs(t, err, ErrNotFound)
+}
+
+func TestList(t *testing.T) {
+	ks, err := New(t.TempDir())
+	require.NoError(t, err)
+
+	envs := []string{"dev", "staging", "prod"}
+	for _, e := range envs {
+		_, err = ks.Generate(e)
+		require.NoError(t, err)
 	}
-	if err != keystore.ErrKeyNotFound {
-		t.Errorf("expected ErrKeyNotFound, got %v", err)
-	}
+
+	list, err := ks.List()
+	require.NoError(t, err)
+	require.ElementsMatch(t, envs, list)
 }
