@@ -53,6 +53,24 @@ func TestDiff_NoChanges(t *testing.T) {
 	}
 }
 
+func TestDiff_MultipleChanges(t *testing.T) {
+	oldMap := map[string]string{"FOO": "old", "GONE": "bye"}
+	newMap := map[string]string{"FOO": "new", "NEW": "hello"}
+
+	entries := Diff(oldMap, newMap)
+	if len(entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(entries))
+	}
+	ops := map[DiffOp]int{}
+	for _, e := range entries {
+		ops[e.Op]++
+	}
+	if ops[DiffAdded] != 1 || ops[DiffRemoved] != 1 || ops[DiffChanged] != 1 {
+		t.Errorf("unexpected op counts: added=%d removed=%d changed=%d",
+			ops[DiffAdded], ops[DiffRemoved], ops[DiffChanged])
+	}
+}
+
 func TestFormatDiff_NoChanges(t *testing.T) {
 	out := FormatDiff(nil)
 	if out != "no changes" {
