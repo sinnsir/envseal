@@ -61,3 +61,40 @@ func TestRotateCmd_RoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, string(got), "KEY=value")
 }
+
+// TestRotateCmd_Idempotent verifies that rotating the same environment twice
+// succeeds and still produces a valid, decryptable store.
+func TestRotateCmd_Idempotent(t *testing.T) {
+	tmp := t.TempDir()
+	t.Setenv("ENVSEAL_KEYSTORE", filepath.Join(tmp, "keys"))
+	t.Setenv("ENVSEAL_STORE", filepath.Join(tmp, "store"))
+	require.NoError(t, os.MkdirAll(filepath.Join(tmp, "store"), 0700))
+
+	plainFile := filepath.Join(tmp, ".env.prod")
+	require.NoError(t, os.WriteFile(plainFile, []byte("SECRET=abc123\n"), 0600))
+
+	// Initial seal.
+	root := newRootCmd()
+	root.SetArgs([]string{"seal", "--env", "prod", plainFile})
+	require.NoError(t, root.Execute())
+
+	// First rotation.
+	root2 := newRootCmd()
+	root2.SetArgs([]string{"rotate", "prod"})
+	require.NoError(t, root2.Execute())
+
+	// Second rotation.
+	root3 := newRootCmd()
+	root3.SetArgs([]string{"rotate", "prod"})
+	require.NoError(t, root3.Execute())
+
+	// Verify the data is still readable after two rotations.
+	outFile := filepath.Join(tmp, "decrypted.env")
+	root4 := newRootCmd()
+	root4.SetArgs([]string{"open", "--env", "prod", "--output", outFile})
+	require.NoError(t, root4.Execute())
+
+	got, err := os.ReadFile(outFile)
+	require.NoError(t, err)
+	require.Contains(t, string(got), "SECRET=abc123")
+}
