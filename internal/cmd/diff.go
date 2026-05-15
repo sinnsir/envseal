@@ -59,6 +59,9 @@ func runDiff(cmd *cobra.Command, args []string) error {
 
 	plainRaw, err := os.ReadFile(plainPath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("file %q does not exist", plainPath)
+		}
 		return fmt.Errorf("read %q: %w", plainPath, err)
 	}
 
